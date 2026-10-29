@@ -475,6 +475,9 @@ button,input,textarea,select{font:inherit;color:inherit}
 .lines-full .typeline textarea.typed{width:100%;min-height:512px;box-sizing:border-box;padding:18px 14px 0;resize:vertical;
   font:30px/64px var(--font-read);color:#1d2a18;background-color:#fff;
   background-image:repeating-linear-gradient(to bottom,transparent 0 62px,#8f9a86 62px 64px);background-attachment:local}
+/* Regular (notebook) lines: smaller words on closer lines. */
+.lines-full .typeline.regular textarea.typed{font:20px/38px var(--font-read);padding-top:8px;
+  background-image:repeating-linear-gradient(to bottom,transparent 0 37px,#8f9a86 37px 38px)}
 /* ---- colour-numbered parts: organizer bubble N matches sentence line N ---- */
 .obox[style*="--oc"],.bubble{border-color:var(--oc)!important}
 .obox[style*="--oc"] .onum,.bubble .onum{background:var(--oc)}
@@ -847,6 +850,10 @@ body.locked .toolbar,body.locked .pad-tools,body.locked .crayons{display:none}
                 background:var(--sand);color:var(--sand-ink);font-weight:700;font-size:11px;text-align:center}
 .stds .ican .code{margin-right:6px}
 .bpage.intro .bigbtn.lesson{margin-top:4px}
+/* Inside the bookshelf's window: no logo row, just Contents, so the pages get the room. */
+.embedded .masthead{padding:6px 4px 2px;justify-content:flex-end}
+.embedded .masthead .wordmark,.embedded .masthead .brandmark,.embedded .masthead svg,.embedded .masthead img{display:none}
+.embedded .masthead .chip-btn{margin-left:auto}
 /* writing lines: primary or regular, and more pages */
 .rulepick{display:inline-flex;gap:4px}
 .rulepick .mini[aria-pressed="true"]{background:var(--brand-soft);border-color:var(--brand);color:var(--brand-ink)}
@@ -2241,7 +2248,7 @@ ENGINES.readtext = (b, ctx) => {
 ENGINES.writelines = (b, ctx) => {
   const wrap = el("section", "block");
   if (b.directions) wrap.append(directionsLine(b, ctx));
-  let typing = false, rule = "primary";
+  let typing = false, rule = b.rule || "primary";
   const rows = [];                 // every row of lines, on this page and any added pages
   const toggles = [], ruleBtns = [];
   const base = b.rows[0];
@@ -2290,6 +2297,7 @@ ENGINES.writelines = (b, ctx) => {
     const padBox = el("div"); padBox.style.display = "flex"; padBox.style.flexDirection = "column"; padBox.style.gap = "4px";
     padBox.append(pad.el);
     const tl = el("div", "typeline"); tl.hidden = !typing;
+    if (rule === "regular") tl.classList.add("regular");
     padBox.hidden = typing;
     const inp = lines > 1 ? el("textarea", "typed") : el("input");
     if (lines === 1) inp.type = "text";
@@ -3186,7 +3194,7 @@ ENGINES.slide = (b, ctx) => {
     t.setAttribute("aria-label", a.label);
     t.placeholder = "Tap to type";
     t.readOnly = true; t.tabIndex = -1;
-    t.addEventListener("input", () => { showHandle(a); ctx.changed(); });
+    t.addEventListener("input", () => { fitText(t); showHandle(a); ctx.changed(); });
     t.addEventListener("focus", () => showHandle(a));
     t.addEventListener("blur", () => showHandle(a));
     boxes[a.id] = t;
@@ -3252,7 +3260,7 @@ ENGINES.slide = (b, ctx) => {
     load(d){
       if (!d) return;
       pad.load(d.s);
-      Object.entries(d.t || {}).forEach(([k, v]) => { if (boxes[k]) boxes[k].value = v; });
+      Object.entries(d.t || {}).forEach(([k, v]) => { if (boxes[k]) { boxes[k].value = v; fitText(boxes[k]); } });
       Object.entries(d.at || {}).forEach(([k, xy]) => { const a = b.areas.find(z => z.id === k); if (a) { moved[k] = xy; place(a, xy[0], xy[1]); } });
       b.areas.forEach(showHandle);
     },
@@ -3264,6 +3272,17 @@ ENGINES.slide = (b, ctx) => {
     lock(){ pad.lock(); Object.values(boxes).forEach(t => { t.readOnly = true; }); Object.values(handles).forEach(h => { h.hidden = true; }); },
   };
 };
+
+/* Typed words shrink to fit their bubble or box (never below 55% of the page size). */
+function fitText(t){
+  t.style.fontSize = "";
+  if (!t.value || !t.clientHeight) return;
+  const base = parseFloat(getComputedStyle(t).fontSize);
+  for (let k = 1; t.scrollHeight > t.clientHeight + 1 && k > 0.55; ) {
+    k -= 0.05; t.style.fontSize = (base * k).toFixed(1) + "px";
+  }
+}
+window.addEventListener("resize", () => document.querySelectorAll("textarea.slidebox").forEach(fitText));
 
 /* The week's prompt, printed on the organizer where its Name and Date line
    was, so it sits right beside the lines. Every organizer has that line in
@@ -3530,7 +3549,7 @@ function renderSheet(sheetId){
   const stds = el("div", "stds");
   if (page.standard) {
     const st = el("p", "ican");
-    st.append(el("span", "gr", "K"), el("span", "code", page.standard.code), document.createTextNode(page.standard.text));
+    st.append(el("span", "gr", page.standard.grade || "K"), el("span", "code", page.standard.code), document.createTextNode(page.standard.text));
     stds.append(say(st, actx, "standard"));
   }
   (page.standardsMore || []).forEach((m, i) => {
@@ -4368,7 +4387,23 @@ function paperPop(){
 const PAGE_ASPECT = 1545 / 2000;          // the organizer's shape, so it fills its page
 const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 let leaves = [], pos = 0;
-const twoUp = () => window.innerWidth >= 820;
+const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
+if (EMBEDDED) document.documentElement.classList.add("embedded");
+const wideScreen = () => window.innerWidth >= 820;
+// The height the header, toolbar and turn bar leave for the book.
+function bookRoom(){
+  const mh = $("#masthead"), tb = $("#turnbar");
+  const used = (mh ? mh.offsetHeight : 0) + (!tb || tb.hidden ? 0 : tb.offsetHeight) + ($("#dock") ? 50 : 0) + 40;
+  return Math.max(430, window.innerHeight - used);
+}
+// Pages a child writes on open one at a time, big, unless two side by side
+// are still big enough to write on (about 600px wide each).
+function soloPages(){
+  if (!wideScreen() || !DATA[PAGES[current]]) return false;
+  const availW = window.innerWidth - 2 * 62;
+  return Math.min(availW / 2, bookRoom() * PAGE_ASPECT) < 600;
+}
+const twoUp = () => wideScreen() && !soloPages();
 function bookPage(kind){ return el("div", "bpage " + (kind || "")); }
 
 function mountBook(list, at){
@@ -4413,23 +4448,28 @@ function layout(){
 function sizeBook(){
   const book = $(".spreadbook"), row = $(".bookrow");
   if (!book || !row) return;
-  const two = twoUp();
+  const two = twoUp(), phone = !wideScreen();
   book.classList.toggle("one", !two);
-  row.classList.toggle("one", !two);
-  const dk = $("#dock");
-  const used = $("#masthead").offsetHeight + ($("#turnbar").hidden ? 0 : $("#turnbar").offsetHeight) + (dk ? 50 : 0) + 52;
+  row.classList.toggle("one", phone);
+  const availH = bookRoom();
   if (two) {
     // Two pages, as big as the screen allows, in the organizer's shape.
     const availW = Math.max(480, row.clientWidth - 2 * ($(".turn.prev").offsetWidth + 10));
-    const availH = Math.max(430, window.innerHeight - used);
     const pw = Math.floor(Math.min(availW / 2, availH * PAGE_ASPECT));
+    book.style.setProperty("--pw", pw + "px");
+    book.style.setProperty("--ph", Math.floor(pw / PAGE_ASPECT) + "px");
+  } else if (!phone) {
+    // One big page between the arrows, in the organizer's shape. It may be
+    // taller than the window: the page scrolls, and the lines stay big enough to write on.
+    const availW = Math.max(320, row.clientWidth - 2 * ($(".turn.prev").offsetWidth + 10));
+    const pw = Math.floor(Math.min(availW, 760));
     book.style.setProperty("--pw", pw + "px");
     book.style.setProperty("--ph", Math.floor(pw / PAGE_ASPECT) + "px");
   } else {
     // A phone: one page, the full width, the arrows underneath.
     const pw = Math.floor(Math.min(row.clientWidth, 620));
     book.style.setProperty("--pw", pw + "px");
-    book.style.setProperty("--ph", Math.floor(Math.max(560, window.innerHeight - used - 56)) + "px");
+    book.style.setProperty("--ph", Math.floor(Math.max(560, availH - 56)) + "px");
   }
 }
 /* Each drawing space keeps its shape and grows to fill the space it has. */
